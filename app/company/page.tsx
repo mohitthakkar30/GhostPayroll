@@ -3,22 +3,80 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { PublicKey } from '@solana/web3.js';
 import WalletButton from '../components/WalletButton';
 import Link from 'next/link';
+import { useGhostPayroll } from '../hooks/useGhostPayroll';
+import { getCompanyPDA } from '../lib/anchor/pdas';
 
 export default function CompanyDashboard() {
   const { connected, publicKey } = useWallet();
+  const { program, initializeCompany } = useGhostPayroll();
   const router = useRouter();
   const [hasCompany, setHasCompany] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [companyData, setCompanyData] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
+  // Check if company exists on mount
   useEffect(() => {
     if (!connected) {
       router.push('/');
+      return;
     }
-  }, [connected, router]);
+
+    async function checkCompany() {
+      if (!program || !publicKey) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const [companyPDA] = getCompanyPDA(publicKey);
+        const company = await program.account.company.fetch(companyPDA);
+        setCompanyData(company);
+        setHasCompany(true);
+      } catch (err) {
+        // Company doesn't exist yet
+        setHasCompany(false);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    checkCompany();
+  }, [connected, program, publicKey, router]);
 
   if (!connected) {
     return null;
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-dark-bg">
+        <header className="border-b border-dark-border bg-dark-card/50 backdrop-blur-sm sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center h-16">
+              <div className="flex items-center gap-3">
+                <h1 className="text-xl font-bold text-ghost-400">Ghost Payroll</h1>
+                <span className="text-slate-500">|</span>
+                <span className="text-sm text-slate-400">Company Dashboard</span>
+              </div>
+              <WalletButton />
+            </div>
+          </div>
+        </header>
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-center justify-center min-h-[60vh]">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-ghost-500 mx-auto mb-4"></div>
+              <p className="text-slate-400">Loading company data...</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
   }
 
   return (
@@ -45,10 +103,51 @@ export default function CompanyDashboard() {
               <h2 className="text-2xl font-bold text-white mb-2">Create Your Company</h2>
               <p className="text-slate-400 mb-6">Initialize your payroll system on Solana</p>
 
-              <form className="space-y-4" onSubmit={(e) => {
+              <form className="space-y-4" onSubmit={async (e: React.FormEvent<HTMLFormElement>) => {
                 e.preventDefault();
-                // TODO: Initialize company on-chain
-                setHasCompany(true);
+                if (!program || !publicKey) return;
+
+                const formData = new FormData(e.currentTarget);
+                const name = formData.get('name') as string;
+                const paymentFrequency = formData.get('paymentFrequency') as string;
+
+                setCreating(true);
+                setError(null);
+
+                try {
+                  // Mock budget commitment (32 bytes of zeros for now)
+                  const budgetCommitment = Array(32).fill(0);
+
+                  // USDC mint address on devnet
+                  const paymentToken = new PublicKey('Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr');
+
+                  // Convert payment frequency to enum
+                  const frequency = paymentFrequency === '0' ? { weekly: {} } :
+                                   paymentFrequency === '1' ? { biweekly: {} } :
+                                   { monthly: {} };
+
+                  const signature = await initializeCompany(
+                    program,
+                    publicKey,
+                    name,
+                    budgetCommitment,
+                    paymentToken,
+                    frequency
+                  );
+
+                  console.log('Company created! Signature:', signature);
+
+                  // Fetch the newly created company account
+                  const [companyPDA] = getCompanyPDA(publicKey);
+                  const company = await program.account.company.fetch(companyPDA);
+                  setCompanyData(company);
+                  setHasCompany(true);
+                } catch (err: any) {
+                  console.error('Error creating company:', err);
+                  setError(err.message || 'Failed to create company');
+                } finally {
+                  setCreating(false);
+                }
               }}>
                 <div>
                   <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -56,6 +155,7 @@ export default function CompanyDashboard() {
                   </label>
                   <input
                     type="text"
+                    name="name"
                     maxLength={50}
                     placeholder="Acme Inc."
                     className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg focus:outline-none focus:ring-2 focus:ring-ghost-500 text-white"
@@ -67,7 +167,10 @@ export default function CompanyDashboard() {
                   <label className="block text-sm font-medium text-slate-300 mb-2">
                     Payment Frequency
                   </label>
-                  <select className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg focus:outline-none focus:ring-2 focus:ring-ghost-500 text-white">
+                  <select
+                    name="paymentFrequency"
+                    className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg focus:outline-none focus:ring-2 focus:ring-ghost-500 text-white"
+                  >
                     <option value="0">Weekly</option>
                     <option value="1">Bi-weekly</option>
                     <option value="2">Monthly</option>
@@ -80,20 +183,28 @@ export default function CompanyDashboard() {
                   </label>
                   <input
                     type="number"
+                    name="initialAmount"
                     min="1"
                     step="0.000001"
                     placeholder="10000"
                     className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg focus:outline-none focus:ring-2 focus:ring-ghost-500 text-white"
                     required
                   />
-                  <p className="text-xs text-slate-500 mt-1">Minimum: 1 USDC</p>
+                  <p className="text-xs text-slate-500 mt-1">Minimum: 1 USDC (for treasury funding later)</p>
                 </div>
+
+                {error && (
+                  <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg text-sm">
+                    {error}
+                  </div>
+                )}
 
                 <button
                   type="submit"
-                  className="w-full bg-ghost-600 hover:bg-ghost-700 text-white font-medium py-3 px-4 rounded-lg transition-all duration-200 hover:shadow-glow"
+                  disabled={creating}
+                  className="w-full bg-ghost-600 hover:bg-ghost-700 text-white font-medium py-3 px-4 rounded-lg transition-all duration-200 hover:shadow-glow disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Create Company
+                  {creating ? 'Creating Company...' : 'Create Company'}
                 </button>
               </form>
             </div>
@@ -182,15 +293,33 @@ export default function CompanyDashboard() {
               <div className="space-y-3 text-sm">
                 <div className="flex justify-between">
                   <span className="text-slate-400">Company Name</span>
-                  <span className="text-white font-medium">Acme Inc.</span>
+                  <span className="text-white font-medium">{companyData?.name || 'Loading...'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Payment Frequency</span>
-                  <span className="text-white font-medium">Monthly</span>
+                  <span className="text-white font-medium">
+                    {companyData?.paymentFrequency?.weekly ? 'Weekly' :
+                     companyData?.paymentFrequency?.biweekly ? 'Bi-weekly' :
+                     companyData?.paymentFrequency?.monthly ? 'Monthly' : 'Loading...'}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Total Employees</span>
+                  <span className="text-white font-medium">{companyData?.employeeCount?.toString() || '0'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Total Payments Made</span>
+                  <span className="text-white font-medium">{companyData?.totalPaymentsMade?.toString() || '0'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Company PDA</span>
-                  <span className="text-white font-mono text-xs">{publicKey?.toBase58().slice(0, 8)}...{publicKey?.toBase58().slice(-8)}</span>
+                  <span className="text-white font-mono text-xs">
+                    {publicKey ? getCompanyPDA(publicKey)[0].toBase58().slice(0, 8) + '...' + getCompanyPDA(publicKey)[0].toBase58().slice(-8) : ''}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">Status</span>
+                  <span className="text-ghost-400 font-medium">{companyData?.isActive ? 'Active' : 'Inactive'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Network</span>

@@ -8,7 +8,9 @@
       "./node_modules/@types"
     ],
     "lib": [
-      "es2015"
+      "es2015",
+      "dom",
+      "dom.iterable"
     ],
     "module": "commonjs",
     "target": "es6",

@@ -3,56 +3,135 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { PublicKey } from '@solana/web3.js';
 import WalletButton from '../../components/WalletButton';
 import Link from 'next/link';
+import { useGhostPayroll } from '../../hooks/useGhostPayroll';
+import { getCompanyPDA } from '../../lib/anchor/pdas';
 
 interface Employee {
-  id: string;
-  name: string;
   walletAddress: string;
+  encryptedSalary: number[];
+  isActive: boolean;
   selected: boolean;
 }
 
 type PaymentStage = 'idle' | 'generating-proof' | 'processing' | 'complete' | 'error';
 
 export default function PaymentsPage() {
-  const { connected } = useWallet();
+  const { connected, publicKey } = useWallet();
+  const { program, processPayment, recordPaymentProof } = useGhostPayroll();
   const router = useRouter();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [paymentStage, setPaymentStage] = useState<PaymentStage>('idle');
   const [usePrivateTransfer, setUsePrivateTransfer] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [lastTxSignature, setLastTxSignature] = useState('');
 
   useEffect(() => {
     if (!connected) {
       router.push('/');
+      return;
     }
-  }, [connected, router]);
+
+    async function loadEmployees() {
+      if (!program || !publicKey) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const [companyPDA] = getCompanyPDA(publicKey);
+
+        // Fetch all active employees for this company
+        const employeeAccounts = await program.account.employee.all([
+          {
+            memcmp: {
+              offset: 8 + 32, // After discriminator and wallet pubkey
+              bytes: companyPDA.toBase58(),
+            }
+          }
+        ]);
+
+        const employeeData = employeeAccounts
+          .filter((acc: any) => acc.account.isActive)
+          .map((acc: any) => ({
+            walletAddress: acc.account.wallet.toString(),
+            encryptedSalary: acc.account.encryptedSalary,
+            isActive: acc.account.isActive,
+            selected: false,
+          }));
+
+        setEmployees(employeeData);
+      } catch (err) {
+        console.error('Error loading employees:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadEmployees();
+  }, [connected, program, publicKey, router]);
 
   const selectedCount = employees.filter(e => e.selected).length;
 
   const handleProcessPayment = async () => {
-    if (selectedCount === 0) return;
+    if (selectedCount === 0 || !program || !publicKey) return;
 
-    // Stage 1: Generating ZK proof
-    setPaymentStage('generating-proof');
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    const selectedEmployees = employees.filter(e => e.selected);
 
-    // Stage 2: Processing payment
-    setPaymentStage('processing');
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    try {
+      // Stage 1: Generating ZK proof
+      setPaymentStage('generating-proof');
+      await new Promise(resolve => setTimeout(resolve, 1500));
 
-    // Stage 3: Complete
-    setPaymentStage('complete');
-    await new Promise(resolve => setTimeout(resolve, 2000));
+      // Stage 2: Processing payments
+      setPaymentStage('processing');
 
-    // Reset
-    setPaymentStage('idle');
-    setEmployees(employees.map(e => ({ ...e, selected: false })));
+      let lastSignature = '';
+      for (const employee of selectedEmployees) {
+        // Mock: In Phase 3C, this will use ShadowWire for private transfers
+        // For now, we'll use a direct payment with mock amount
+        const mockAmount = BigInt(5000 * 1_000_000); // 5000 USDC (mock)
+        const amountCommitment = Array(32).fill(0); // Mock commitment
+
+        const signature = await processPayment(
+          program,
+          publicKey,
+          new PublicKey(employee.walletAddress),
+          mockAmount,
+          amountCommitment
+        );
+
+        console.log('Payment processed:', signature);
+
+        // Record payment proof on-chain
+        await recordPaymentProof(
+          program,
+          publicKey,
+          new PublicKey(employee.walletAddress),
+          BigInt(Date.now()),
+          amountCommitment,
+          [], // Mock ZK proof (will be from ShadowWire in Phase 3C)
+          signature
+        );
+
+        lastSignature = signature;
+      }
+
+      setLastTxSignature(lastSignature);
+
+      // Stage 3: Complete
+      setPaymentStage('complete');
+    } catch (error) {
+      console.error('Payment error:', error);
+      setPaymentStage('error');
+    }
   };
 
-  const toggleEmployee = (id: string) => {
+  const toggleEmployee = (walletAddress: string) => {
     setEmployees(employees.map(e =>
-      e.id === id ? { ...e, selected: !e.selected } : e
+      e.walletAddress === walletAddress ? { ...e, selected: !e.selected } : e
     ));
   };
 
@@ -66,6 +145,35 @@ export default function PaymentsPage() {
 
   if (!connected) {
     return null;
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-dark-bg">
+        <header className="border-b border-dark-border bg-dark-card/50 backdrop-blur-sm sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center h-16">
+              <div className="flex items-center gap-4">
+                <Link href="/company" className="text-slate-400 hover:text-white transition-colors">
+                  ← Back
+                </Link>
+                <span className="text-slate-500">|</span>
+                <h1 className="text-xl font-bold text-ghost-400">Process Payments</h1>
+              </div>
+              <WalletButton />
+            </div>
+          </div>
+        </header>
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-center justify-center min-h-[60vh]">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-ghost-500 mx-auto mb-4"></div>
+              <p className="text-slate-400">Loading employees...</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
   }
 
   return (
@@ -167,8 +275,8 @@ export default function PaymentsPage() {
               <div className="p-6 space-y-3">
                 {employees.map((employee) => (
                   <div
-                    key={employee.id}
-                    onClick={() => toggleEmployee(employee.id)}
+                    key={employee.walletAddress}
+                    onClick={() => toggleEmployee(employee.walletAddress)}
                     className={`p-4 rounded-lg border-2 transition-all cursor-pointer ${
                       employee.selected
                         ? 'border-ghost-600 bg-ghost-950/30'
@@ -184,15 +292,14 @@ export default function PaymentsPage() {
                           className="w-4 h-4 text-ghost-600 rounded focus:ring-ghost-500"
                         />
                         <div>
-                          <div className="font-semibold text-white">{employee.name}</div>
                           <div className="text-sm text-slate-400 font-mono">
-                            {employee.walletAddress.slice(0, 8)}...{employee.walletAddress.slice(-8)}
+                            {employee.walletAddress.slice(0, 12)}...{employee.walletAddress.slice(-12)}
                           </div>
                         </div>
                       </div>
                       <div className="text-right">
                         <div className="text-sm text-slate-400">Salary</div>
-                        <div className="encrypted-text text-sm">████████</div>
+                        <div className="encrypted-text text-sm">████████ 🔒</div>
                       </div>
                     </div>
                   </div>
@@ -298,11 +405,28 @@ export default function PaymentsPage() {
                         </div>
                         <div className="flex justify-between">
                           <span className="text-slate-400">Signature</span>
-                          <span className="text-white font-mono text-xs">abc123...xyz789</span>
+                          <span className="text-white font-mono text-xs">
+                            {lastTxSignature ? `${lastTxSignature.slice(0, 8)}...${lastTxSignature.slice(-8)}` : 'N/A'}
+                          </span>
                         </div>
+                        {lastTxSignature && (
+                          <div className="pt-2 border-t border-dark-border">
+                            <a
+                              href={`https://explorer.solana.com/tx/${lastTxSignature}?cluster=devnet`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-ghost-400 hover:text-ghost-300 text-xs flex items-center gap-1"
+                            >
+                              View on Solana Explorer →
+                            </a>
+                          </div>
+                        )}
                       </div>
                       <button
-                        onClick={() => setPaymentStage('idle')}
+                        onClick={() => {
+                          setPaymentStage('idle');
+                          setEmployees(employees.map(e => ({ ...e, selected: false })));
+                        }}
                         className="mt-6 w-full bg-ghost-600 hover:bg-ghost-700 text-white font-medium py-2 px-4 rounded-lg transition-colors"
                       >
                         Done

@@ -3,45 +3,187 @@
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { PublicKey } from '@solana/web3.js';
 import WalletButton from '../../components/WalletButton';
 import Link from 'next/link';
+import { useGhostPayroll } from '../../hooks/useGhostPayroll';
+import { getCompanyPDA, getEmployeePDA } from '../../lib/anchor/pdas';
 
 interface Employee {
-  id: string;
   walletAddress: string;
-  name: string;
-  encryptedSalary: string;
+  encryptedSalary: number[];
+  paymentFrequency: any;
   isActive: boolean;
-  lastPayment: Date | null;
+  lastPaymentDate: Date | null;
+  totalPaymentsReceived: number;
 }
 
 export default function EmployeesPage() {
   const { connected, publicKey } = useWallet();
+  const { program, addEmployee } = useGhostPayroll();
   const router = useRouter();
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [isEncrypting, setIsEncrypting] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [formWallet, setFormWallet] = useState('');
+  const [formSalary, setFormSalary] = useState('');
 
   useEffect(() => {
     if (!connected) {
       router.push('/');
+      return;
     }
-  }, [connected, router]);
+
+    async function loadEmployees() {
+      if (!program || !publicKey) {
+        setLoading(false);
+        return;
+      }
+
+      try {
+        const [companyPDA] = getCompanyPDA(publicKey);
+
+        // Fetch all employee accounts for this company
+        const employeeAccounts = await program.account.employee.all([
+          {
+            memcmp: {
+              offset: 8 + 32, // After discriminator and wallet pubkey
+              bytes: companyPDA.toBase58(),
+            }
+          }
+        ]);
+
+        const employeeData = employeeAccounts.map((acc: any) => ({
+          walletAddress: acc.account.wallet.toString(),
+          encryptedSalary: acc.account.encryptedSalary,
+          paymentFrequency: acc.account.paymentFrequency,
+          isActive: acc.account.isActive,
+          lastPaymentDate: acc.account.lastPaymentDate.toNumber() > 0
+            ? new Date(acc.account.lastPaymentDate.toNumber() * 1000)
+            : null,
+          totalPaymentsReceived: acc.account.totalPaymentsReceived.toNumber(),
+        }));
+
+        setEmployees(employeeData);
+      } catch (err) {
+        console.error('Error loading employees:', err);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    loadEmployees();
+  }, [connected, program, publicKey, router]);
 
   const handleAddEmployee = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!program || !publicKey || !formWallet || !formSalary) return;
+
     setIsEncrypting(true);
+    setError(null);
 
-    // Simulate encryption delay
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    try {
+      // Validate wallet address
+      const employeeWallet = new PublicKey(formWallet);
+      const salary = parseFloat(formSalary);
 
-    // TODO: Add employee on-chain
-    setIsEncrypting(false);
-    setShowAddModal(false);
+      // Mock encryption (Phase 3D will implement Arcium MPC)
+      // Create exactly 32 bytes for encrypted salary
+      const encryptedSalary = new Array(32).fill(0).map(() => 0);
+
+      // Create salary commitment (hash) - must be exactly 32 bytes
+      const salaryCommitment = new Array(32).fill(0).map(() => 0);
+
+      // Validate array lengths
+      if (encryptedSalary.length !== 32 || salaryCommitment.length !== 32) {
+        throw new Error('Invalid array lengths');
+      }
+
+      console.log('Adding employee:', {
+        wallet: employeeWallet.toBase58(),
+        encryptedSalaryLength: encryptedSalary.length,
+        salaryCommitmentLength: salaryCommitment.length,
+      });
+
+      // Add employee on-chain
+      const signature = await addEmployee(
+        program,
+        publicKey,
+        employeeWallet,
+        encryptedSalary,
+        salaryCommitment,
+        { monthly: {} }
+      );
+
+      console.log('Employee added! Signature:', signature);
+
+      // Reload employees
+      const [companyPDA] = getCompanyPDA(publicKey);
+      const employeeAccounts = await program.account.employee.all([
+        {
+          memcmp: {
+            offset: 8 + 32,
+            bytes: companyPDA.toBase58(),
+          }
+        }
+      ]);
+
+      const employeeData = employeeAccounts.map((acc: any) => ({
+        walletAddress: acc.account.wallet.toString(),
+        encryptedSalary: acc.account.encryptedSalary,
+        paymentFrequency: acc.account.paymentFrequency,
+        isActive: acc.account.isActive,
+        lastPaymentDate: acc.account.lastPaymentDate.toNumber() > 0
+          ? new Date(acc.account.lastPaymentDate.toNumber() * 1000)
+          : null,
+        totalPaymentsReceived: acc.account.totalPaymentsReceived.toNumber(),
+      }));
+
+      setEmployees(employeeData);
+      setShowAddModal(false);
+      setFormWallet('');
+      setFormSalary('');
+    } catch (err: any) {
+      console.error('Error adding employee:', err);
+      setError(err.message || 'Failed to add employee');
+    } finally {
+      setIsEncrypting(false);
+    }
   };
 
   if (!connected) {
     return null;
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-dark-bg">
+        <header className="border-b border-dark-border bg-dark-card/50 backdrop-blur-sm sticky top-0 z-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex justify-between items-center h-16">
+              <div className="flex items-center gap-4">
+                <Link href="/company" className="text-slate-400 hover:text-white transition-colors">
+                  ← Back
+                </Link>
+                <span className="text-slate-500">|</span>
+                <h1 className="text-xl font-bold text-ghost-400">Employee Management</h1>
+              </div>
+              <WalletButton />
+            </div>
+          </div>
+        </header>
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-center justify-center min-h-[60vh]">
+            <div className="text-center">
+              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-ghost-500 mx-auto mb-4"></div>
+              <p className="text-slate-400">Loading employees...</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
   }
 
   return (
@@ -115,27 +257,28 @@ export default function EmployeesPage() {
                 <table className="w-full">
                   <thead className="border-b border-dark-border">
                     <tr>
-                      <th className="text-left py-4 px-6 text-sm font-medium text-slate-400">Name</th>
                       <th className="text-left py-4 px-6 text-sm font-medium text-slate-400">Wallet</th>
                       <th className="text-left py-4 px-6 text-sm font-medium text-slate-400">Salary</th>
+                      <th className="text-left py-4 px-6 text-sm font-medium text-slate-400">Payments Received</th>
                       <th className="text-left py-4 px-6 text-sm font-medium text-slate-400">Last Payment</th>
                       <th className="text-left py-4 px-6 text-sm font-medium text-slate-400">Status</th>
-                      <th className="text-left py-4 px-6 text-sm font-medium text-slate-400">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {employees.map((employee) => (
-                      <tr key={employee.id} className="border-b border-dark-border hover:bg-dark-card/30 transition-colors">
-                        <td className="py-4 px-6 text-white font-medium">{employee.name}</td>
+                    {employees.map((employee, index) => (
+                      <tr key={employee.walletAddress} className="border-b border-dark-border hover:bg-dark-card/30 transition-colors">
                         <td className="py-4 px-6 text-slate-400 font-mono text-sm">
-                          {employee.walletAddress.slice(0, 4)}...{employee.walletAddress.slice(-4)}
+                          {employee.walletAddress.slice(0, 8)}...{employee.walletAddress.slice(-8)}
                         </td>
                         <td className="py-4 px-6">
                           <span className="encrypted-text">████████</span>
-                          <span className="text-xs text-slate-500 ml-2">🔒</span>
+                          <span className="text-xs text-slate-500 ml-2">🔒 Encrypted</span>
+                        </td>
+                        <td className="py-4 px-6 text-slate-400">
+                          {employee.totalPaymentsReceived}
                         </td>
                         <td className="py-4 px-6 text-slate-400 text-sm">
-                          {employee.lastPayment ? employee.lastPayment.toLocaleDateString() : 'Never'}
+                          {employee.lastPaymentDate ? employee.lastPaymentDate.toLocaleDateString() : 'Never'}
                         </td>
                         <td className="py-4 px-6">
                           <span className={`px-2 py-1 rounded-full text-xs font-medium ${
@@ -143,12 +286,6 @@ export default function EmployeesPage() {
                           }`}>
                             {employee.isActive ? 'Active' : 'Inactive'}
                           </span>
-                        </td>
-                        <td className="py-4 px-6">
-                          <div className="flex gap-2">
-                            <button className="text-ghost-400 hover:text-ghost-300 text-sm">Edit</button>
-                            <button className="text-red-400 hover:text-red-300 text-sm">Remove</button>
-                          </div>
                         </td>
                       </tr>
                     ))}
@@ -177,23 +314,13 @@ export default function EmployeesPage() {
             <form onSubmit={handleAddEmployee} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Employee Name
-                </label>
-                <input
-                  type="text"
-                  placeholder="John Doe"
-                  className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg focus:outline-none focus:ring-2 focus:ring-ghost-500 text-white"
-                  required
-                  disabled={isEncrypting}
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
                   Wallet Address
                 </label>
                 <input
                   type="text"
+                  name="walletAddress"
+                  value={formWallet}
+                  onChange={(e) => setFormWallet((e.target as HTMLInputElement).value)}
                   placeholder="Solana wallet address"
                   className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg focus:outline-none focus:ring-2 focus:ring-ghost-500 text-white font-mono text-sm"
                   required
@@ -207,6 +334,9 @@ export default function EmployeesPage() {
                 </label>
                 <input
                   type="number"
+                  name="salary"
+                  value={formSalary}
+                  onChange={(e) => setFormSalary((e.target as HTMLInputElement).value)}
                   min="1"
                   step="0.000001"
                   placeholder="5000"
@@ -214,8 +344,14 @@ export default function EmployeesPage() {
                   required
                   disabled={isEncrypting}
                 />
-                <p className="text-xs text-slate-500 mt-1">Minimum: 1 USDC</p>
+                <p className="text-xs text-slate-500 mt-1">Salary will be encrypted using Arcium MPC</p>
               </div>
+
+              {error && (
+                <div className="bg-red-500/10 border border-red-500/50 text-red-400 px-4 py-3 rounded-lg text-sm">
+                  {error}
+                </div>
+              )}
 
               {isEncrypting && (
                 <div className="bg-ghost-950/30 border border-ghost-800/30 rounded-lg p-4">
