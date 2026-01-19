@@ -4,10 +4,10 @@ skip-lint = false
 resolution = true
 
 [programs.localnet]
-ghost_payroll = "GhostPay11111111111111111111111111111111111"
+ghost_payroll = "BW7Efo8SJQhm5TuAiogpJZPjzNKxc4WQhT8PVhBgpsoa"
 
 [programs.devnet]
-ghost_payroll = "GhostPay11111111111111111111111111111111111"
+ghost_payroll = "BW7Efo8SJQhm5TuAiogpJZPjzNKxc4WQhT8PVhBgpsoa"
 
 [registry]
 url = "https://api.apr.dev"
@@ -17,4 +17,4 @@ cluster = "devnet"
 wallet = "/Users/mohitthakkar/.config/solana/id.json"
 
 [scripts]
-test = "yarn run mocha -t 1000000 tests/"
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"

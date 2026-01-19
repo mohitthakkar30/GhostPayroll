@@ -8,7 +8,7 @@ pub mod state;
 use instructions::*;
 use state::PaymentFrequency;
 
-declare_id!("GhostPay11111111111111111111111111111111111");
+declare_id!("BW7Efo8SJQhm5TuAiogpJZPjzNKxc4WQhT8PVhBgpsoa");
 
 #[program]
 pub mod ghost_payroll {
