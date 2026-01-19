@@ -1,0 +1,20 @@
+[features]
+seeds = false
+skip-lint = false
+resolution = true
+
+[programs.localnet]
+ghost_payroll = "GhostPay11111111111111111111111111111111111"
+
+[programs.devnet]
+ghost_payroll = "GhostPay11111111111111111111111111111111111"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "devnet"
+wallet = "/Users/mohitthakkar/.config/solana/id.json"
+
+[scripts]
+test = "yarn run mocha -t 1000000 tests/"

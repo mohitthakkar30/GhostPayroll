@@ -1,0 +1,245 @@
+# Ghost Payroll - Project Context
+
+## Project Overview
+
+**Ghost Payroll** is a privacy-preserving payroll system built on Solana for the **Solana Privacy Hack Hackathon** (Jan 12-30, 2026, submissions due Feb 1, 2026).
+
+### Core Value Proposition
+- Companies can pay employees with **hidden salary amounts** on-chain
+- Uses **ZK proofs** and **MPC encryption** for privacy
+- Payments are **verifiable** without revealing actual amounts
+- Employees can **cash out** to virtual cards via Starpay
+
+### Target Bounties (Total: $33.5k+)
+- **Arcium** ($10k) - MPC encryption for salary data
+- **ShadowWire/Radr** ($15k) - Private transfers using Bulletproofs
+- **Helius** ($5k) - RPC and webhook monitoring
+- **Starpay** ($3.5k) - Crypto to virtual card cash-out
+
+---
+
+## Technical Architecture
+
+### Tech Stack
+| Component | Technology |
+|-----------|------------|
+| Smart Contracts | Anchor 0.30.1 (Solana) |
+| Private Transfers | ShadowWire (@radr/shadowwire) - Bulletproofs ZK |
+| Encryption | Arcium MPC (Multi-Party Computation) |
+| Monitoring | Helius Webhooks + RPC |
+| Cash-out | Starpay API (virtual Mastercard) |
+| Frontend | Next.js 14 + TypeScript |
+| Styling | Tailwind CSS |
+| Wallet | Solana Wallet Adapter |
+
+### Privacy Flow
+1. **Company** encrypts salary data using Arcium MPC before storing on-chain
+2. **Payment** is executed via ShadowWire's private transfer (amount hidden using Bulletproofs)
+3. **Proof** is recorded on-chain (proves payment happened without revealing amount)
+4. **Employee** can verify payment and optionally cash out to Starpay virtual card
+
+---
+
+## Smart Contract Design
+
+### Account Structures
+
+#### Company Account
+```rust
+pub struct Company {
+    pub authority: Pubkey,           // Company admin wallet
+    pub name: String,                // Company name (max 50 chars)
+    pub employee_count: u16,         // Active employee count
+    pub budget_commitment: [u8; 32], // Hash commitment of budget (not actual amount)
+    pub payment_token: Pubkey,       // USDC mint address
+    pub payment_frequency: PaymentFrequency, // Weekly/Biweekly/Monthly
+    pub last_payment_timestamp: i64, // Unix timestamp
+    pub next_payment_due: i64,       // Unix timestamp
+    pub total_payments_made: u64,    // Counter
+    pub is_active: bool,
+    pub bump: u8,
+}
+```
+
+#### Employee Account
+```rust
+pub struct Employee {
+    pub wallet: Pubkey,              // Employee's wallet address
+    pub company: Pubkey,             // Associated company PDA
+    pub encrypted_salary: Vec<u8>,   // Arcium-encrypted salary (max 256 bytes)
+    pub salary_commitment: [u8; 32], // Hash for verification
+    pub payment_frequency: PaymentFrequency,
+    pub join_date: i64,
+    pub last_payment_date: i64,
+    pub total_payments_received: u64,
+    pub is_active: bool,
+    pub bump: u8,
+}
+```
+
+#### PaymentProof Account
+```rust
+pub struct PaymentProof {
+    pub payment_id: u64,
+    pub employee: Pubkey,
+    pub company: Pubkey,
+    pub payment_date: i64,
+    pub amount_commitment: [u8; 32], // Hash of amount (not actual amount)
+    pub zk_proof: Vec<u8>,           // Bulletproof or ZK proof (max 512 bytes)
+    pub shadowwire_tx_signature: String, // ShadowWire transaction ID
+    pub status: PaymentStatus,       // Pending/Processing/Completed/Failed
+    pub bump: u8,
+}
+```
+
+### Instructions
+1. `initialize_company` - Create company with treasury PDA
+2. `add_employee` - Add employee with encrypted salary
+3. `update_employee_salary` - Update encrypted salary
+4. `remove_employee` - Soft delete (deactivate) employee
+5. `process_payment` - Execute payment from treasury to employee
+6. `record_payment_proof` - Store ShadowWire proof on-chain
+
+### PDA Seeds
+- Company: `["company", authority.key()]`
+- Employee: `["employee", company.key(), employee_wallet]`
+- Treasury: `["treasury", company.key()]`
+- PaymentProof: `["payment_proof", company.key(), employee_wallet, payment_id]`
+
+---
+
+## External Integrations
+
+### ShadowWire (Private Payments)
+- **Purpose**: Hide payment amounts using Bulletproofs (ZK proofs)
+- **Package**: `@radr/shadowwire`
+- **Transfer Types**:
+  - Internal: Amount completely hidden (both parties use ShadowWire)
+  - External: Sender anonymous, amount visible
+- **Fee**: 1% relayer fee
+- **Supported Tokens**: SOL, USDC, BONK, RADR, and more
+
+### Arcium (MPC Encryption)
+- **Purpose**: Encrypt salary data so only company + employee can decrypt
+- **Approach**: Multi-Party Computation - process encrypted data without decrypting
+- **Integration**: Mark sensitive data as "confidential" in Arcis (Rust extension)
+
+### Helius (Monitoring)
+- **Purpose**: Real-time payment tracking and notifications
+- **Features**: Webhooks, RPC, transaction indexing
+- **Use Case**: Notify employee when payment is complete
+
+### Starpay (Cash-out)
+- **Purpose**: Convert crypto to virtual Mastercard
+- **Features**: No KYC, Apple/Google Pay integration
+- **Fees**: 0.2% activation, 2.5% top-up
+
+---
+
+## Project Structure
+
+```
+ghost-payroll/
+├── programs/ghost-payroll/src/
+│   ├── lib.rs                 # Main program entry, instruction handlers
+│   ├── state.rs               # Account structures (Company, Employee, PaymentProof)
+│   ├── errors.rs              # Custom error types
+│   ├── constants.rs           # Seeds, limits, fees
+│   └── instructions/
+│       ├── mod.rs
+│       ├── initialize_company.rs
+│       ├── add_employee.rs
+│       ├── update_employee_salary.rs
+│       ├── remove_employee.rs
+│       ├── process_payment.rs
+│       └── record_payment_proof.rs
+├── app/                       # Next.js frontend (to be created)
+├── tests/                     # Anchor tests
+├── Anchor.toml               # Anchor configuration
+├── Cargo.toml                # Rust workspace
+└── package.json              # Node dependencies
+```
+
+---
+
+## Build Commands
+
+```bash
+# Set PATH for Solana tools (required for Rust edition 2024 compatibility)
+export PATH="/Users/mohitthakkar/.local/share/solana/install/active_release/bin:$PATH"
+
+# Build the program
+anchor build
+
+# Run tests
+anchor test
+
+# Deploy to devnet
+anchor deploy --provider.cluster devnet
+
+# Generate IDL
+anchor idl init --filepath target/idl/ghost_payroll.json <PROGRAM_ID>
+```
+
+---
+
+## Environment Setup
+
+### Required Versions
+- Rust: 1.92+ (for edition 2024 support)
+- Anchor: 0.30.1
+- Solana CLI: 3.0.13+ (Agave)
+- Node.js: 18+
+
+### Key Environment Variables
+```env
+NEXT_PUBLIC_SOLANA_RPC_URL=https://api.devnet.solana.com
+NEXT_PUBLIC_PROGRAM_ID=<deployed_program_id>
+HELIUS_API_KEY=<api_key>
+SHADOWWIRE_API_KEY=<api_key>
+STARPAY_API_KEY=<api_key>
+```
+
+---
+
+## Demo Flow
+
+1. **Company Setup**
+   - CEO connects wallet
+   - Creates company with name and payment schedule
+   - Deposits USDC to treasury
+
+2. **Employee Onboarding**
+   - Add employees with wallet addresses
+   - Set encrypted salaries (amounts hidden on-chain)
+
+3. **Run Payroll**
+   - Process payments via ShadowWire
+   - Amounts are hidden using Bulletproofs
+   - Proofs recorded on-chain
+
+4. **Verification**
+   - Show Solana Explorer - amounts are NOT visible
+   - Employee receives notification via Helius webhook
+   - Employee can verify payment occurred
+
+5. **Cash Out**
+   - Employee converts USDC to Starpay virtual card
+   - Use Apple Pay/Google Pay for real-world spending
+
+---
+
+## Hackathon Resources
+
+### Documentation Links
+- ShadowWire: https://github.com/Radrdotfun/ShadowWire
+- Arcium: https://docs.arcium.com/developers
+- Helius: https://www.helius.dev/docs
+- Starpay: https://www.starpay.cards/
+- Privacy on Solana: https://github.com/catmcgee/awesome-privacy-on-solana
+
+### Hackathon Info
+- Dates: Jan 12-30, 2026
+- Submissions Due: Feb 1, 2026
+- Winners Announced: Feb 10, 2026
+- Total Prize Pool: $100k+
